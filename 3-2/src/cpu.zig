@@ -5,6 +5,7 @@ const ArrayList = std.ArrayList;
 pub const Cpu = struct {
     register_a: u8,
     register_x: u8,
+    register_y: u8,
     status: u8,
     program_counter: u16, //指令指针 ip
     memory: [0xFFFF]u8,
@@ -13,6 +14,7 @@ pub const Cpu = struct {
         return .{
             .register_a = 0,
             .register_x = 0,
+            .register_y = 0,
             .status = 0,
             .program_counter = 0,
             .memory = undefined,
@@ -22,36 +24,29 @@ pub const Cpu = struct {
     //执行指令 (字节码)
     //取指->解码->执行
     pub fn interpret(cpu: *Cpu) void {
+        const opcodes = Opcode.create();
         outer: while (true) {
-            const opscode = cpu.memRead(cpu.program_counter);
+            const code = cpu.memRead(cpu.program_counter);
             cpu.program_counter += 1;
+            const program_counter_state = cpu.program_counter;
 
-            switch (opscode) {
-                0xA9 => {
-                    cpu.lda(.immediate);
-                    cpu.program_counter += 1;
+            const opcode: Opcode = opcodes.get(code).?;
+
+            switch (code) {
+                0xA9, 0xA5, 0xB5, 0xAD, 0xB9, 0xA1, 0xB1 => {
+                    cpu.lda(opcode.addressing_mode);
                 },
-                0xAA => {
-                    cpu.tax();
+                0x85, 0x95, 0x8d, 0x9d, 0x99, 0x81, 0x91 => {
+                    cpu.sta(opcode.addressing_mode);
                 },
-                0xA5 => {
-                    cpu.lda(.zero_page);
-                    cpu.program_counter += 1;
-                },
-                0xAD => {
-                    cpu.lda(.absolute);
-                    cpu.program_counter += 2;
-                },
-                0x85 => {
-                    cpu.sta(.zero_page);
-                    cpu.program_counter += 1;
-                },
-                0x95 => {
-                    cpu.sta(.zero_page_x);
-                    cpu.program_counter += 1;
-                },
+                0xAA => cpu.tax(),
+                0xE8 => cpu.inx(),
                 0x00 => break :outer,
                 else => {},
+            }
+
+            if (program_counter_state == cpu.program_counter) {
+                cpu.program_counter += opcode.bytes - 1;
             }
         }
     }
@@ -66,6 +61,11 @@ pub const Cpu = struct {
         const value = cpu.memRead(addr);
         cpu.register_a = value;
         cpu.updateZeroAndNegativeFlags(cpu.register_a);
+    }
+
+    fn inx(cpu: *Cpu) void {
+        cpu.register_x = cpu.register_x + 1;
+        cpu.updateZeroAndNegativeFlags(cpu.register_x);
     }
 
     fn updateZeroAndNegativeFlags(cpu: *Cpu, result: u8) void {
@@ -118,6 +118,7 @@ pub const Cpu = struct {
     pub fn reset(cpu: *Cpu) void {
         cpu.register_a = 0;
         cpu.register_x = 0;
+        cpu.register_y = 0;
         cpu.status = 0;
         cpu.program_counter = cpu.memReadU16(0xFFFC);
     }
@@ -134,7 +135,7 @@ pub const Cpu = struct {
             },
             .zero_page_y => blk: {
                 const pos = cpu.memRead(cpu.program_counter);
-                const addr = cpu.register_a + pos;
+                const addr = cpu.register_y + pos;
                 break :blk @intCast(addr);
             },
             .absolute_x => blk: {
@@ -142,9 +143,9 @@ pub const Cpu = struct {
                 const addr = @as(u16, @intCast(cpu.register_x)) + base;
                 break :blk @intCast(addr);
             },
-            .Absolute_y => blk: {
+            .absolute_y => blk: {
                 const base = cpu.memReadU16(cpu.program_counter);
-                const addr = @as(u16, @intCast(cpu.register_a)) + base;
+                const addr = @as(u16, @intCast(cpu.register_y)) + base;
                 break :blk @intCast(addr);
             },
             .indirect_x => blk: {
@@ -160,7 +161,7 @@ pub const Cpu = struct {
                 const low: u16 = @intCast(cpu.memRead(@intCast(ptr)));
                 const high: u16 = @intCast(cpu.memRead(@intCast(ptr + 1)));
                 const deref_base = (high << 8) | low;
-                break :blk @intCast(deref_base + cpu.register_a);
+                break :blk @intCast(deref_base + cpu.register_y);
             },
             else => |m| @panic("mode" ++ @typeName(@TypeOf(m)) ++ "is not supported!"),
         };
@@ -173,6 +174,7 @@ pub const Cpu = struct {
 };
 
 const AddressingMode = @import("mode.zig").AddressingMode;
+const Opcode = @import("opcode.zig").Opcode;
 
 test Cpu {
     try test_0xa9_lda_immediate_loda_data();
@@ -225,7 +227,7 @@ fn test_5_opscode_working() !void {
     defer program.deinit();
     cpu.loadAndRun(program);
 
-    try std.testing.expectEqual(@as(u8, cpu.register_x), 0xc0);
+    try std.testing.expectEqual(@as(u8, cpu.register_x), 0xc1);
 }
 
 fn test_inx_overflow() !void {
@@ -234,9 +236,7 @@ fn test_inx_overflow() !void {
     try program.appendSlice(&.{ 0xe8, 0xe8, 0x00 });
     defer program.deinit();
     cpu.loadAndRun(program);
-    cpu.register_x = 0xff;
-
-    try std.testing.expectEqual(@as(u8, cpu.register_x), 0xff);
+    try std.testing.expectEqual(@as(u8, cpu.register_x), 2);
 }
 
 fn testLdaFromMemory() !void {
@@ -246,6 +246,6 @@ fn testLdaFromMemory() !void {
     try program.appendSlice(&.{ 0xa5, 0x10, 0x00 });
     defer program.deinit();
     cpu.loadAndRun(program);
-    // std.debug.print("{any}\n", .{cpu.register_a});
+
     try std.testing.expectEqual(cpu.register_a, 0x55);
 }

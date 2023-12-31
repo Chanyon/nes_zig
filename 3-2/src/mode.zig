@@ -8,7 +8,7 @@ pub const AddressingMode = enum {
     zero_page_y,
     absolute,
     absolute_x,
-    Absolute_y,
+    absolute_y,
     indirect_x,
     indirect_y,
     none_addressing,
